@@ -245,7 +245,7 @@ def get_wallet_balances(wallet_address: str, block_number: int, csv_mode: bool =
     
     return result
 
-def fetch_token_transactions(wallet_address: str, STAKE_CONTRACT_ADDRESS: str, start_block: int, csv_mode: bool = False) -> list[int]:
+def fetch_token_transactions(wallet_address: str, STAKE_CONTRACT_ADDRESS: str, start_block: int, csv_mode: bool = False) -> list[tuple[int, str]]:
     wallet_addr_lower = wallet_address.lower()
     counterparty_addr_lower = STAKE_CONTRACT_ADDRESS.lower()
 
@@ -270,8 +270,8 @@ def fetch_token_transactions(wallet_address: str, STAKE_CONTRACT_ADDRESS: str, s
                 print(f"Result: {data.get('result', 'N/A')}")
             return []
 
-        block_numbers = set()
         transactions = data['result']
+        block_types = set()
 
         for tx in transactions:
             tx_from = tx['from'].lower()
@@ -281,12 +281,14 @@ def fetch_token_transactions(wallet_address: str, STAKE_CONTRACT_ADDRESS: str, s
             is_incoming = (tx_from == counterparty_addr_lower and tx_to == wallet_addr_lower)
 
             if is_outgoing or is_incoming:
-                block_numbers.add(int(tx['blockNumber']))
+                block_number = int(tx['blockNumber'])
+                tx_type = "Stake" if is_outgoing else "Withdraw"
+                block_types.add((block_number, tx_type))
                 if not csv_mode:
                     token_symbol = tx['tokenSymbol']
-                    print(f"Found transfer of {token_symbol} in Block #{tx['blockNumber']} from {tx['from']} to {tx['to']}")
+                    print(f"Found {tx_type} transfer of {token_symbol} in Block #{tx['blockNumber']} from {tx['from']} to {tx['to']}")
 
-        return list(block_numbers)
+        return list(block_types)
 
     except requests.exceptions.RequestException as e:
         if not csv_mode:
@@ -297,7 +299,7 @@ def fetch_token_transactions(wallet_address: str, STAKE_CONTRACT_ADDRESS: str, s
             print(f"An unexpected error occurred: {e}")
         return []
 
-def fetch_update_rewards_blocks(rebase_controller_address: str, start_block: int, method_id: str, csv_mode: bool = False) -> list[int]:
+def fetch_update_rewards_blocks(rebase_controller_address: str, start_block: int, method_id: str, csv_mode: bool = False) -> list[tuple[int, str]]:
     rebase_controller_lower = rebase_controller_address.lower()
     params = {
         "module": "account",
@@ -320,16 +322,17 @@ def fetch_update_rewards_blocks(rebase_controller_address: str, start_block: int
         blocks = set()
         for tx in data['result']:
             if tx['to'].lower() == rebase_controller_lower and tx['input'].startswith(method_id):
-                blocks.add(int(tx['blockNumber']))
+                block_number = int(tx['blockNumber'])
+                blocks.add((block_number, "Rewards"))
                 if not csv_mode:
-                    print(f"Found 'Update Rewards' transaction in Block #{tx['blockNumber']}")
+                    print(f"Found 'Rewards' transaction in Block #{tx['blockNumber']}")
         return list(blocks)
     except Exception as e:
         if not csv_mode:
-            print(f"Error fetching 'Update Rewards' transactions: {e}")
+            print(f"Error fetching 'Rewards' transactions: {e}")
         return []
 
-def get_monday_block_numbers(start_date: datetime, end_date: datetime, TIME_OF_DAY: str) -> list[int]:
+def get_monday_block_numbers(start_date: datetime, end_date: datetime, TIME_OF_DAY: str) -> list[tuple[int, str]]:
     blocks = []
     utc = pytz.UTC
     time_parts = list(map(int, TIME_OF_DAY.split(":")))
@@ -339,10 +342,10 @@ def get_monday_block_numbers(start_date: datetime, end_date: datetime, TIME_OF_D
     while current_date <= end_date:
         if current_date.weekday() == 0:
             target_datetime = current_date + target_time
-            if start_date <= target_datetime < end_date:  # Changed to < end_date
+            if start_date <= target_datetime < end_date:
                 timestamp = int(target_datetime.timestamp())
                 block_number = get_block_number_for_timestamp(w3, timestamp)
-                blocks.append(block_number)
+                blocks.append((block_number, "Rewards"))
         current_date += timedelta(days=1)
     
     return blocks
@@ -365,7 +368,7 @@ def main():
     try:
         utc = pytz.UTC
         default_start_date = datetime.strptime(DEFAULT_START_DATE, "%Y-%m-%d").replace(tzinfo=utc)
-        monday_end_date = datetime(2025, 2, 24, 0, 0, 0, tzinfo=utc)  # Hardcoded to Feb 24, 2025
+        monday_end_date = datetime(2025, 2, 24, 0, 0, 0, tzinfo=utc)
 
         if args.datefrom == DEFAULT_START_DATE:
             start_timestamp = int(default_start_date.timestamp())
@@ -384,7 +387,7 @@ def main():
                 else:
                     return
             
-            earliest_block = min(transaction_blocks)
+            earliest_block = min(block_num for block_num, _ in transaction_blocks)
             earliest_timestamp = w3.eth.get_block(earliest_block).timestamp
             start_date = datetime.fromtimestamp(earliest_timestamp, tz=utc)
         else:
@@ -402,36 +405,35 @@ def main():
         monday_blocks = get_monday_block_numbers(start_date, monday_end_date, TIME_OF_DAY)
         
         # Fetch Update Rewards blocks
-        
         method_id = "0x128606a6" #Update Rewards method id
         update_rewards_blocks = fetch_update_rewards_blocks(REBASE_CONTROLLER_ADDRESS, start_block, method_id, args.csv)
         
-        # Combine all blocks (Block no, Reward)
+        # Combine all blocks (Block no, Type)
         all_blocks = sorted(
-            [(block, True) for block in monday_blocks] +
-            [(block, False) for block in transaction_blocks] +
-            [(block, True) for block in update_rewards_blocks],
+            monday_blocks +
+            transaction_blocks +
+            update_rewards_blocks,
             key=lambda x: x[0]
         )
         
         if args.csv:
             writer = csv.writer(sys.stdout, lineterminator='\n')
-            writer.writerow(['block_date', 'block', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'reward_share'])
+            writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'reward_share'])
         else:
             print(f"\n=== Balances for {USER_WALLET_ADDRESS} at {len(all_blocks)} blocks ===")
         
         previous_lsd_tokens = None
         previous_queued_tokens = None
-        for block_num, is_reward in all_blocks:
+        for block_num, block_type in all_blocks:
             try:
                 block_timestamp = get_block_timestamp(block_num)
                 block_date = datetime.fromtimestamp(block_timestamp, tz=utc).strftime("%Y-%m-%d %H:%M:%S")
                 
                 balances = get_wallet_balances(USER_WALLET_ADDRESS, block_num, args.csv)
                 
-                # Calculate reward for Reward blocks
+                # Calculate reward for Rewards blocks
                 reward = Decimal(0)
-                if is_reward and previous_lsd_tokens is not None:
+                if block_type == "Rewards" and previous_lsd_tokens is not None:
                     reward = uint256_to_decimal(balances['lsd_tokens']) - previous_lsd_tokens - (previous_queued_tokens - uint256_to_decimal(balances['queued_tokens']))
                 
                 previous_lsd_tokens = uint256_to_decimal(balances['lsd_tokens'])
@@ -441,21 +443,22 @@ def main():
                     writer.writerow([
                         block_date,
                         block_num,
+                        block_type,
                         str(uint256_to_decimal(balances['stlink_balance'])),
                         str(uint256_to_decimal(balances['link_balance'])),
                         str(uint256_to_decimal(balances['lsd_tokens'])),
                         str(uint256_to_decimal(balances['queued_tokens'])),
-                        f"{reward:.8f}"
+                        f"{reward:.8f}"                        
                     ])
                 else:
-                    print(f"\nBlock {block_num} (Date: {block_date})")
+                    print(f"\nBlock {block_num} (Date: {block_date}, Type: {block_type})")
                     print(f"Wallet:")
                     print(f"  stLINK: {uint256_to_decimal(balances['stlink_balance'])}")
                     print(f"  LINK: {uint256_to_decimal(balances['link_balance'])}")
                     print(f"Priority Pool:")
                     print(f"  stLINK: {uint256_to_decimal(balances['lsd_tokens'])}")
                     print(f"  LINK: {uint256_to_decimal(balances['queued_tokens'])} (Queued)")
-                    if is_reward:
+                    if block_type == "Rewards":
                         print(f"  Reward: {reward:.8f}")
             except Exception as e:
                 if not args.csv:

@@ -92,7 +92,7 @@ python script.py [--datefrom YYYY-MM-DD] [--csv]
   - Rewards for reward blocks.
 
 - **CSV**:
-  Columns: `block_date`, `block`, `stlink_balance`, `link_balance`, `lsd_tokens`, `queued_tokens`, `reward_share`.
+  Columns: `block_date`, `block`, `type`, `stlink_balance`, `link_balance`, `lsd_tokens`, `queued_tokens`, `reward_share`.
 
 ## Configuration Details
 - **Contracts**:
@@ -101,7 +101,7 @@ python script.py [--datefrom YYYY-MM-DD] [--csv]
   - stLINK Token: `0xb8b295df2cd735b15BE5Eb419517Aa626fc43cD5`
   - Rebase Controller: `0x1711e93eec78ba83D38C26f0fF284eB478bdbec4`
 - **Default Start Block**: 18385225 (corresponding to 2023-10-19).
-- **Snapshot Time**: 13:00:00 UTC every Monday.
+- **Snapshot Time**: 13:00:00 UTC every Monday (extra hour in case it's late).
 - **Etherscan API**: Used for token transfers and reward updates.
 - **IPFS Gateway**: `https://ipfs.io/ipfs/` for fetching distribution data.
 
