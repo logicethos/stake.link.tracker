@@ -43,19 +43,15 @@ This Python script fetches and tracks wallet balances for LINK and stLINK tokens
    pip install -r requirements.txt
    ```
 
-3. **Configure Environment Variables** (optional):
-   Create a `.env` file or set environment variables:
+3. **Configure Environment Variables** :
+   Or create a stLink.sh script (see stLink.sh_EXAMPLE):
    ```bash
    export RPC_URL="https://eth-mainnet.g.alchemy.com/v2/your-api-key"
    export ETHERSCAN_API_KEY="your-etherscan-api-key"
    export USER_WALLET_ADDRESS="0xYourWalletAddress"
+   python stLink.py
    ```
 
-4. **Update Configuration** (if not using environment variables):
-   Edit the script to set:
-   - `RPC_URL`
-   - `ETHERSCAN_API_KEY`
-   - `USER_WALLET_ADDRESS`
 
 ## Usage
 Run the script with optional arguments:
