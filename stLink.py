@@ -422,8 +422,9 @@ def main():
         else:
             print(f"\n=== Balances for {USER_WALLET_ADDRESS} at {len(all_blocks)} blocks ===")
         
-        previous_lsd_tokens = None
-        previous_queued_tokens = None
+        previous_stlink_balance_uint = None
+        previous_lsd_tokens_uint = None
+        previous_queued_tokens_uint = None
         for block_num, block_type in all_blocks:
             try:
                 block_timestamp = get_block_timestamp(block_num)
@@ -431,33 +432,39 @@ def main():
                 
                 balances = get_wallet_balances(USER_WALLET_ADDRESS, block_num, args.csv)
                 
+                stlink_balance_uint = uint256_to_decimal(balances['stlink_balance'])
+                lsd_tokens_uint = uint256_to_decimal(balances['lsd_tokens'])
+                queued_tokens_uint = uint256_to_decimal(balances['queued_tokens'])
+                
+                
                 # Calculate reward for Rewards blocks
                 reward = Decimal(0)
-                if block_type == "Rewards" and previous_lsd_tokens is not None:
-                    reward = uint256_to_decimal(balances['lsd_tokens']) - previous_lsd_tokens - (previous_queued_tokens - uint256_to_decimal(balances['queued_tokens']))
+                if block_type == "Rewards" and previous_lsd_tokens_uint is not None:
+                    reward = (stlink_balance_uint - previous_stlink_balance_uint) + (lsd_tokens_uint - previous_lsd_tokens_uint) - (previous_queued_tokens_uint - queued_tokens_uint)
                 
-                previous_lsd_tokens = uint256_to_decimal(balances['lsd_tokens'])
-                previous_queued_tokens = uint256_to_decimal(balances['queued_tokens'])
+                previous_stlink_balance_uint = stlink_balance_uint
+                previous_lsd_tokens_uint = lsd_tokens_uint
+                previous_queued_tokens_uint = queued_tokens_uint
                 
                 if args.csv:
                     writer.writerow([
                         block_date,
                         block_num,
                         block_type,
-                        str(uint256_to_decimal(balances['stlink_balance'])),
+                        str(stlink_balance_uint),
                         str(uint256_to_decimal(balances['link_balance'])),
-                        str(uint256_to_decimal(balances['lsd_tokens'])),
-                        str(uint256_to_decimal(balances['queued_tokens'])),
+                        str(lsd_tokens_uint),
+                        str(queued_tokens_uint),
                         f"{reward:.8f}"                        
                     ])
                 else:
                     print(f"\nBlock {block_num} (Date: {block_date}, Type: {block_type})")
                     print(f"Wallet:")
-                    print(f"  stLINK: {uint256_to_decimal(balances['stlink_balance'])}")
+                    print(f"  stLINK: {stlink_balance_uint}")
                     print(f"  LINK: {uint256_to_decimal(balances['link_balance'])}")
                     print(f"Priority Pool:")
-                    print(f"  stLINK: {uint256_to_decimal(balances['lsd_tokens'])}")
-                    print(f"  LINK: {uint256_to_decimal(balances['queued_tokens'])} (Queued)")
+                    print(f"  stLINK: {lsd_tokens_uint}")
+                    print(f"  LINK: {queued_tokens_uint} (Queued)")
                     if block_type == "Rewards":
                         print(f"  Reward: {reward:.8f}")
             except Exception as e:
