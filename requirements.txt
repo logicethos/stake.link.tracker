@@ -2,3 +2,9 @@ web3==6.20.0
 requests==2.32.3
 base58==2.1.1
 pytz==2024.2
+
+# Core library for Google Sheets access
+gspread==5.12.4
+
+# Handles authentication with Google Cloud Platform
+google-auth-oauthlib==1.2.0

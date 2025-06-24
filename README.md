@@ -1,7 +1,8 @@
 # Stake.link Rewards Tracker
 ### Do your taxes!
 
-This Python script fetches and tracks wallet balances for LINK and stLINK tokens, including staked and queued tokens in a priority pool, on the Ethereum mainnet. It retrieves data at specific blocks, including transaction blocks, weekly snapshots (every Monday at 13:00 UTC), and reward update blocks, and can output results in a human-readable format or as CSV.
+This Python script fetches and tracks wallet balances for LINK and stLINK tokens, including staked and queued tokens in a priority pool, on the Ethereum mainnet. It retrieves data at specific blocks, including transaction blocks, and reward update blocks, and can output results in a human-readable format or as CSV. 
+Optional Google Sheets integration.
 
 ## Features
 - **Wallet Balance Tracking**: Retrieves LINK and stLINK token balances for a specified wallet.
@@ -113,6 +114,63 @@ python script.py [--datefrom YYYY-MM-DD] [--csv]
 - **Etherscan API Errors**: Check `ETHERSCAN_API_KEY` and API rate limits.
 - **IPFS Errors**: Ensure the IPFS gateway is accessible and the contract's IPFS hash is valid.
 - **No Transactions Found**: Confirm `USER_WALLET_ADDRESS` and `STAKE_CONTRACT_ADDRESS` are correct.
+
+## Google Cloud & Sheets Setup - OPTIONAL
+
+To allow the application to automatically update a Google Sheet, you must authorize it using a Google Cloud Service Account. This is a one-time setup process.
+
+### Step 1: Create a Google Cloud Project & Enable APIs
+
+1.  Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2.  If you don't have a project, create a **New Project**. Give it a descriptive name (e.g., `My App Integrations`).
+3.  Once in your project, go to the **APIs & Services** dashboard.
+4.  Click **+ ENABLE APIS AND SERVICES**.
+5.  Search for and **enable** the following two APIs:
+    *   **Google Sheets API**
+    *   **Google Drive API** (this is required for finding sheets by name/ID)
+
+### Step 2: Create a Service Account
+
+A service account is a special type of Google account intended to represent a non-human user that needs to authenticate and be authorized to access data in Google APIs.
+
+1.  In the **APIs & Services** section, navigate to **Credentials**.
+2.  Click **+ CREATE CREDENTIALS** and select **Service account**.
+3.  Fill in the details:
+    *   **Service account name:** A short name (e.g., `google-sheets-updater`).
+    *   **Service account ID:** This will be automatically generated.
+    *   **Description:** A clear description (e.g., "Service account to update project data in Google Sheets").
+4.  Click **CREATE AND CONTINUE**.
+5.  **Grant access (Permissions):** In the "Grant this service account access to project" step, select the **Editor** role for simplicity. This provides sufficient permissions. Click **CONTINUE**, then **DONE**.
+
+### Step 3: Generate a JSON Key
+
+You need a private key file for your application to authenticate as the service account.
+
+1.  On the **Credentials** page, find the service account you just created in the "Service Accounts" list and click on it.
+2.  Go to the **KEYS** tab.
+3.  Click **ADD KEY** -> **Create new key**.
+4.  Select **JSON** as the key type and click **CREATE**.
+5.  A JSON file will be downloaded to your computer. **This file is a secret credential—treat it like a password!**
+6.  Move this file into your project directory and rename it to `service-account-key.json` (or another name of your choice). **Do not commit this file to public Git repositories.** Add it to your `.gitignore` file.
+
+### Step 4: Share Your Google Sheet
+
+Finally, you must give your new service account permission to edit the specific Google Sheet you want to update.
+
+1.  Open your downloaded `service-account-key.json` file in a text editor.
+2.  Find the `client_email` address. It will look something like `your-account-name@your-project-id.iam.gserviceaccount.com`. Copy this email address.
+3.  Open the target Google Sheet.
+4.  Click the **Share** button in the top-right corner.
+5.  Paste the `client_email` into the "Add people and groups" field.
+6.  Ensure it is given **Editor** permissions.
+7.  Click **Send**. You do not need to check the "Notify people" box.
+
+Your setup is now complete. The application can use the JSON key to securely access and update the shared Google Sheet.
+
+### Step 5: Update python script.
+
+1. Edit stLink.sh
+2. Add URL of your spreadsheet.
 
 ## License
 MIT License
