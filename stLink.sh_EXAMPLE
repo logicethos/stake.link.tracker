@@ -23,16 +23,12 @@ else
 
     if [ -z "$LAST_DATE" ]; then
       echo "No previous date found. Using a default start date."
-      LAST_DATE="2024-01-01"
-      START_DATE=$LAST_DATE
+      python stLink.py --csv | python update_gsheet.py
     else
+      echo "Last entry was on $LAST_DATE. Fetching new data since then..."
       START_DATE=$(date -d "$LAST_DATE - 7 days" +%Y-%m-%d)
+      python stLink.py --csv --datefrom "$START_DATE" | python update_gsheet.py
     fi
-
-    echo "Last entry was on $LAST_DATE. Fetching new data since then..."
-
-    # Now use this date in your original script's command
-    python stLink.py --csv --datefrom "$START_DATE" | python update_gsheet.py
 
     echo "Setting up the 'Monthly Report' tab..."
     python update_gsheet.py --setup-report-tab
