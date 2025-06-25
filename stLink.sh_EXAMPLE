@@ -24,6 +24,7 @@ else
     if [ -z "$LAST_DATE" ]; then
       echo "No previous date found. Using a default start date."
       LAST_DATE="2024-01-01"
+      START_DATE=$LAST_DATE
     else
       START_DATE=$(date -d "$LAST_DATE - 7 days" +%Y-%m-%d)
     fi
