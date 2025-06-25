@@ -12,6 +12,24 @@ export USER_WALLET_ADDRESS="0x??????????????????????????"
 #export GCP_SERVICE_ACCOUNT_FILE="service-account-key.json"
 
 
+# Check and rename block_timestamp_cache.db_tmp
+if [ ! -f block_timestamp_cache.db ]; then
+    if [ -f block_timestamp_cache.db_tmp ]; then
+        mv block_timestamp_cache.db_tmp block_timestamp_cache.db
+        echo "Renamed block_timestamp_cache.db_tmp to block_timestamp_cache.db"
+    fi
+fi
+
+# Check and rename price_cache.db_tmp
+if [ ! -f price_cache.db ]; then
+    if [ -f price_cache.db_tmp ]; then
+        mv price_cache.db_tmp price_cache.db
+        echo "Renamed price_cache.db_tmp to price_cache.db"
+    fi
+fi
+
+
+
 if [ -z "$GOOGLE_SHEET_URL" ]; then
 
     python stLink.py --csv
