@@ -8,6 +8,8 @@ import pytz
 import csv
 import sys
 import os
+import time
+import shelve
 
 # --- CONFIGURATION ---
 RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/??????????"
@@ -116,6 +118,7 @@ def uint256_to_decimal(n: int, decimals: int = 18) -> Decimal:
 
 block_timestamp_cache = {}
 
+
 def get_block_number_for_timestamp(w3, target_timestamp):
     latest_block = w3.eth.get_block('latest')
     latest_timestamp = latest_block['timestamp']
@@ -138,18 +141,60 @@ def get_block_number_for_timestamp(w3, target_timestamp):
             low = mid + 1
         else:
             high = mid
-    # Cache the final block's timestamp if not already cached
     if low not in block_timestamp_cache:
         block_timestamp_cache[low] = w3.eth.get_block(low)['timestamp']
     return low
 
 def get_block_timestamp(block_num):
-    if block_num in block_timestamp_cache:
-        return block_timestamp_cache[block_num]
-    else:
-        timestamp = w3.eth.get_block(block_num)['timestamp']
-        block_timestamp_cache[block_num] = timestamp
-        return timestamp
+    with shelve.open('block_timestamp_cache.db') as cache:
+        if str(block_num) in cache:  # Keys must be strings in Shelve
+            return cache[str(block_num)]
+        else:
+            timestamp = w3.eth.get_block(block_num)['timestamp']
+            cache[str(block_num)] = timestamp
+            return timestamp
+
+def get_link_price(date: str, csv_mode: bool = False) -> float:
+    with shelve.open('price_cache.db') as cache:
+        if date in cache:
+            return cache[date]
+        
+        max_retries = 10
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            time.sleep(1)  # 1-second delay for every request
+            
+            try:
+                url = f"https://api.coingecko.com/api/v3/coins/chainlink/history?date={date}&localization=false"
+                response = requests.get(url, timeout=10)
+                
+                if response.status_code == 429:
+                    retry_count += 1
+                    time.sleep(10)
+                    if not csv_mode:
+                        print(f"Rate limit hit for {date}, retry {retry_count}/{max_retries}", file=sys.stderr)
+                    continue
+                    
+                response.raise_for_status()
+                data = response.json()
+                
+                price = float(data['market_data']['current_price']['usd'])
+                cache[date] = price  # Store in Shelve
+                return price
+                
+            except requests.exceptions.RequestException as e:
+                if not csv_mode:
+                    print(f"Error fetching LINK price for {date}: {e}", file=sys.stderr)
+                return 0.0
+            except Exception as e:
+                if not csv_mode:
+                    print(f"Unexpected error fetching LINK price for {date}: {e}", file=sys.stderr)
+                return 0.0
+        
+        if not csv_mode:
+            print(f"Max retries reached for {date}", file=sys.stderr)
+        return 0.0
 
 def fetch_ipfs_data(cid: str, wallet_address: str, csv_mode: bool = False) -> tuple[int, int]:
     gateway_url = f"https://ipfs.io/ipfs/{cid}"
@@ -404,11 +449,9 @@ def main():
         
         monday_blocks = get_monday_block_numbers(start_date, monday_end_date, TIME_OF_DAY)
         
-        # Fetch Update Rewards blocks
-        method_id = "0x128606a6" #Update Rewards method id
+        method_id = "0x128606a6"
         update_rewards_blocks = fetch_update_rewards_blocks(REBASE_CONTROLLER_ADDRESS, start_block, method_id, args.csv)
         
-        # Combine all blocks (Block no, Type)
         all_blocks = sorted(
             monday_blocks +
             transaction_blocks +
@@ -418,7 +461,7 @@ def main():
         
         if args.csv:
             writer = csv.writer(sys.stdout, lineterminator='\n')
-            writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'reward_share'])
+            writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'reward_share', 'link_price_usd'])
         else:
             print(f"\n=== Balances for {USER_WALLET_ADDRESS} at {len(all_blocks)} blocks ===")
         
@@ -428,7 +471,9 @@ def main():
         for block_num, block_type in all_blocks:
             try:
                 block_timestamp = get_block_timestamp(block_num)
-                block_date = datetime.fromtimestamp(block_timestamp, tz=utc).strftime("%Y-%m-%d %H:%M:%S")
+                block_date = datetime.fromtimestamp(block_timestamp, tz=utc)
+                block_date_str = block_date.strftime("%Y-%m-%d %H:%M:%S")
+                price_date = block_date.strftime("%d-%m-%Y")
                 
                 balances = get_wallet_balances(USER_WALLET_ADDRESS, block_num, args.csv)
                 
@@ -436,11 +481,14 @@ def main():
                 lsd_tokens_uint = uint256_to_decimal(balances['lsd_tokens'])
                 queued_tokens_uint = uint256_to_decimal(balances['queued_tokens'])
                 
-                
-                # Calculate reward for Rewards blocks
                 reward = Decimal(0)
-                if block_type == "Rewards" and previous_lsd_tokens_uint is not None:
-                    reward = (stlink_balance_uint - previous_stlink_balance_uint) + (lsd_tokens_uint - previous_lsd_tokens_uint) - (previous_queued_tokens_uint - queued_tokens_uint)
+                if block_type == "Rewards":
+                    if previous_lsd_tokens_uint is not None:
+                       reward = (stlink_balance_uint - previous_stlink_balance_uint) + (lsd_tokens_uint - previous_lsd_tokens_uint) - (previous_queued_tokens_uint - queued_tokens_uint)
+                    else:
+                       continue
+                
+                link_price = get_link_price(price_date, args.csv) if block_type == "Rewards" else 0.0
                 
                 previous_stlink_balance_uint = stlink_balance_uint
                 previous_lsd_tokens_uint = lsd_tokens_uint
@@ -448,17 +496,18 @@ def main():
                 
                 if args.csv:
                     writer.writerow([
-                        block_date,
+                        block_date_str,
                         block_num,
                         block_type,
                         str(stlink_balance_uint),
                         str(uint256_to_decimal(balances['link_balance'])),
                         str(lsd_tokens_uint),
                         str(queued_tokens_uint),
-                        f"{reward:.8f}"                        
+                        f"{reward:.8f}",
+                        f"{link_price:.2f}"
                     ])
                 else:
-                    print(f"\nBlock {block_num} (Date: {block_date}, Type: {block_type})")
+                    print(f"\nBlock {block_num} (Date: {block_date_str}, Type: {block_type})")
                     print(f"Wallet:")
                     print(f"  stLINK: {stlink_balance_uint}")
                     print(f"  LINK: {uint256_to_decimal(balances['link_balance'])}")
@@ -467,6 +516,7 @@ def main():
                     print(f"  LINK: {queued_tokens_uint} (Queued)")
                     if block_type == "Rewards":
                         print(f"  Reward: {reward:.8f}")
+                        print(f"  LINK Price (USD): {link_price:.2f}")
             except Exception as e:
                 if not args.csv:
                     print(f"Error processing block {block_num}: {e}")

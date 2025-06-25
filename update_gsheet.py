@@ -23,6 +23,8 @@ SPREADSHEET_URL = os.getenv('GOOGLE_SHEET_URL')
 WORKSHEET_NAME = os.getenv('GOOGLE_SHEET_TAB_NAME', 'stLink Data')
 SERVICE_ACCOUNT_FILE = os.getenv('GCP_SERVICE_ACCOUNT_FILE')
 
+NUMERICAL_COLUMNS = ['stlink_balance','link_balance','lsd_tokens','queued_tokens','reward_share','link_price_usd']
+
 UNIQUE_ID_COLUMN = 'block'
 DATE_COLUMN_NAME = 'block_date'
 PERMISSION_ERROR_EXIT_CODE = 3
@@ -77,6 +79,21 @@ def connect_to_gsheet():
         print(f"ERROR DETAILS: {repr(e)}\n", file=sys.stderr)
         sys.exit(1)
 
+def convert_to_number(value):
+    """Convert a string to int or float if it represents a number, else return unchanged."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    try:
+        # Try int first
+        return int(value)
+    except ValueError:
+        try:
+            # Then try float
+            return float(value)
+        except ValueError:
+            # Return original string if not a number
+            return value
+
 def handle_get_last_date(worksheet):
     """Finds, formats, and prints the latest date from the specified date column."""
     print(f"Fetching header from '{worksheet.title}' to find '{DATE_COLUMN_NAME}' column...", file=sys.stderr)
@@ -115,7 +132,7 @@ def handle_get_last_date(worksheet):
         print("No valid dates found in the column.", file=sys.stderr)
 
 def handle_update_sheet(worksheet):
-    """Reads CSV from stdin and appends new, unique rows to the sheet."""
+    """Reads CSV from stdin and appends new, unique rows to the sheet with proper numerical types."""
     print("Reading new data from stdin...", file=sys.stderr)
     stdin_data = sys.stdin.read()
     if not stdin_data.strip():
@@ -129,13 +146,48 @@ def handle_update_sheet(worksheet):
         return
     new_header = new_data_rows[0]
 
+    # Option 1: Use predefined numerical columns
+    numerical_col_indices = []
+    if NUMERICAL_COLUMNS:
+        try:
+            numerical_col_indices = [new_header.index(col) for col in NUMERICAL_COLUMNS]
+        except ValueError as e:
+            print(f"Warning: One or more numerical columns {NUMERICAL_COLUMNS} not found in header.", file=sys.stderr)
+
+    # Option 2: Auto-detect numerical columns (if NUMERICAL_COLUMNS is empty)
+    if not numerical_col_indices:
+        print("Auto-detecting numerical columns...", file=sys.stderr)
+        for col_idx in range(len(new_header)):
+            is_numerical = True
+            for row in new_data_rows[1:]:
+                if len(row) > col_idx and row[col_idx].strip():
+                    try:
+                        float(row[col_idx])
+                    except ValueError:
+                        is_numerical = False
+                        break
+            if is_numerical:
+                numerical_col_indices.append(col_idx)
+        if numerical_col_indices:
+            detected_cols = [new_header[idx] for idx in numerical_col_indices]
+            print(f"Detected numerical columns: {detected_cols}", file=sys.stderr)
+
+    # Convert numerical values in rows to append
+    converted_rows = [new_data_rows[0]]  # Keep header unchanged
+    for row in new_data_rows[1:]:
+        new_row = row.copy()
+        for col_idx in numerical_col_indices:
+            if len(new_row) > col_idx:
+                new_row[col_idx] = convert_to_number(new_row[col_idx])
+        converted_rows.append(new_row)
+
     print(f"Fetching existing data from tab '{worksheet.title}'...", file=sys.stderr)
     existing_data = worksheet.get_all_values()
     
     rows_to_append = []
     if not existing_data:
         print("Sheet is empty. Adding all new data.", file=sys.stderr)
-        rows_to_append = new_data_rows
+        rows_to_append = converted_rows
     else:
         existing_header = existing_data[0]
         try:
@@ -143,14 +195,14 @@ def handle_update_sheet(worksheet):
             existing_ids = {row[unique_id_col_index] for row in existing_data[1:] if len(row) > unique_id_col_index}
             print(f"Found {len(existing_ids)} existing unique IDs.", file=sys.stderr)
             new_unique_id_col_index = new_header.index(UNIQUE_ID_COLUMN)
-            for row in new_data_rows[1:]:
+            for row in converted_rows[1:]:
                 if len(row) > new_unique_id_col_index and row[new_unique_id_col_index] not in existing_ids:
                     rows_to_append.append(row)
         except (ValueError, IndexError):
             print(f"Warning: Could not find '{UNIQUE_ID_COLUMN}' in header or data is inconsistent.", file=sys.stderr)
             print("Clearing the sheet and adding all new data to ensure consistency.", file=sys.stderr)
             worksheet.clear()
-            rows_to_append = new_data_rows
+            rows_to_append = converted_rows
     
     if rows_to_append:
         print(f"Appending {len(rows_to_append)} new rows...", file=sys.stderr)
@@ -158,7 +210,7 @@ def handle_update_sheet(worksheet):
         print("Successfully updated the Google Sheet.", file=sys.stderr)
     else:
         print("No new rows to add. The sheet is already up-to-date.", file=sys.stderr)
-
+        
 def handle_setup_report_tab(spreadsheet, source_tab_name):
     """Creates/configures the 'Monthly Report' tab with formulas and a slicer."""
     print(f"Attempting to set up the '{REPORT_WORKSHEET_NAME}' tab...", file=sys.stderr)
@@ -184,16 +236,21 @@ def handle_setup_report_tab(spreadsheet, source_tab_name):
 
     report_worksheet.clear()
 
-    query_formula = f"=QUERY('{source_tab_name}'!A:G, \"SELECT * WHERE A IS NOT NULL\")"
+    query_formula = f"=QUERY('{source_tab_name}'!A:G, \"SELECT * WHERE A IS NOT NULL\")"       
     reward_formula = (
         f"=ARRAYFORMULA(IF((A2:A <> \"\") * (TEXT(A2:A, \"YYYY-MM\") <> TEXT(A3:A, \"YYYY-MM\")), "
         f"SUMIF(TEXT(A2:A, \"YYYY-MM\"), TEXT(A2:A, \"YYYY-MM\"), '{source_tab_name}'!H2:H), \"\"))"
     )
+    price_formula = f"=ARRAYFORMULA('{source_tab_name}'!I:I)"
+    total_formula = f"=ARRAYFORMULA(IFERROR(ROUND(H2:H*I2:I,2)))"
 
     requests.extend([
         {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': query_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 0}}},
         {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'stringValue': REPORT_TAB_REWARD_HEADER}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 7}}},
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': reward_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 7}}}
+        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': reward_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 7}}},        
+        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': price_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 8}}},
+        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': total_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 9}}},
+        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'stringValue': 'Reward $USD'}}]}], 'fields': 'userEnteredValue', 'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 9}}}
     ])
     
     print("Adding new slicer for 'Monthly Reward' column...", file=sys.stderr)

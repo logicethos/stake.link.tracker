@@ -23,6 +23,7 @@ else
 
     if [ -z "$LAST_DATE" ]; then
       echo "No previous date found. Using a default start date."
+      echo "NOTE: THIS MAKE TAKE SOMETIME. This is to avoid rate limits."
       python stLink.py --csv | python update_gsheet.py
     else
       echo "Last entry was on $LAST_DATE. Fetching new data since then..."
@@ -35,3 +36,4 @@ else
     echo "NOTE: You may need to refresh your Google Sheet page"
 
 fi
+
