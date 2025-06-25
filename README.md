@@ -1,8 +1,7 @@
 # Stake.link Rewards Tracker
-### Do your taxes!
 
 This Python script fetches and tracks wallet balances for LINK and stLINK tokens, including staked and queued tokens in a priority pool, on the Ethereum mainnet. It retrieves data at specific blocks, including transaction blocks, and reward update blocks, and can output results in a human-readable format or as CSV. 
-Optional Google Sheets integration.
+Also optional Google Sheets integration.
 
 ## Features
 - **Wallet Balance Tracking**: Retrieves LINK and stLINK token balances for a specified wallet.
