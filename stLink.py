@@ -461,7 +461,7 @@ def main():
         
         if args.csv:
             writer = csv.writer(sys.stdout, lineterminator='\n')
-            writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'reward_share', 'link_price_usd'])
+            writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'link_price_usd' , 'reward_share'])
         else:
             print(f"\n=== Balances for {USER_WALLET_ADDRESS} at {len(all_blocks)} blocks ===")
         
@@ -503,8 +503,8 @@ def main():
                         str(uint256_to_decimal(balances['link_balance'])),
                         str(lsd_tokens_uint),
                         str(queued_tokens_uint),
-                        f"{reward:.8f}",
-                        f"{link_price:.2f}"
+                        f"{link_price:.2f}",
+                        f"{reward:.8f}"                        
                     ])
                 else:
                     print(f"\nBlock {block_num} (Date: {block_date_str}, Type: {block_type})")
@@ -515,8 +515,9 @@ def main():
                     print(f"  stLINK: {lsd_tokens_uint}")
                     print(f"  LINK: {queued_tokens_uint} (Queued)")
                     if block_type == "Rewards":
-                        print(f"  Reward: {reward:.8f}")
                         print(f"  LINK Price (USD): {link_price:.2f}")
+                        print(f"  Reward: {reward:.8f}")
+                        
             except Exception as e:
                 if not args.csv:
                     print(f"Error processing block {block_num}: {e}")

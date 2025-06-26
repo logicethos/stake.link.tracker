@@ -31,7 +31,7 @@ PERMISSION_ERROR_EXIT_CODE = 3
 
 # --- New Constants for the Report Tab ---
 REPORT_WORKSHEET_NAME = "Monthly Report"
-REPORT_TAB_REWARD_HEADER = "Monthly Reward"
+REPORT_TAB_REWARD_HEADER = "stLink Reward"
 
 
 def extract_spreadsheet_id_from_url(url):
@@ -132,7 +132,7 @@ def handle_get_last_date(worksheet):
         print("No valid dates found in the column.", file=sys.stderr)
 
 def handle_update_sheet(worksheet):
-    """Reads CSV from stdin and appends new, unique rows to the sheet with proper numerical types."""
+    """Reads CSV from stdin and appends new, unique rows to the sheet with proper numerical and date types."""
     print("Reading new data from stdin...", file=sys.stderr)
     stdin_data = sys.stdin.read()
     if not stdin_data.strip():
@@ -146,7 +146,7 @@ def handle_update_sheet(worksheet):
         return
     new_header = new_data_rows[0]
 
-    # Option 1: Use predefined numerical columns
+    # Identify numerical and date column indices
     numerical_col_indices = []
     if NUMERICAL_COLUMNS:
         try:
@@ -154,31 +154,30 @@ def handle_update_sheet(worksheet):
         except ValueError as e:
             print(f"Warning: One or more numerical columns {NUMERICAL_COLUMNS} not found in header.", file=sys.stderr)
 
-    # Option 2: Auto-detect numerical columns (if NUMERICAL_COLUMNS is empty)
-    if not numerical_col_indices:
-        print("Auto-detecting numerical columns...", file=sys.stderr)
-        for col_idx in range(len(new_header)):
-            is_numerical = True
-            for row in new_data_rows[1:]:
-                if len(row) > col_idx and row[col_idx].strip():
-                    try:
-                        float(row[col_idx])
-                    except ValueError:
-                        is_numerical = False
-                        break
-            if is_numerical:
-                numerical_col_indices.append(col_idx)
-        if numerical_col_indices:
-            detected_cols = [new_header[idx] for idx in numerical_col_indices]
-            print(f"Detected numerical columns: {detected_cols}", file=sys.stderr)
+    # Identify the block_date column index
+    try:
+        date_col_index = new_header.index(DATE_COLUMN_NAME)
+    except ValueError:
+        print(f"Warning: Date column '{DATE_COLUMN_NAME}' not found in header.", file=sys.stderr)
+        date_col_index = None
 
-    # Convert numerical values in rows to append
+    # Convert numerical values and validate dates in rows to append
     converted_rows = [new_data_rows[0]]  # Keep header unchanged
     for row in new_data_rows[1:]:
         new_row = row.copy()
+        # Convert numerical columns
         for col_idx in numerical_col_indices:
             if len(new_row) > col_idx:
                 new_row[col_idx] = convert_to_number(new_row[col_idx])
+        # Validate and convert date column to string
+        if date_col_index is not None and len(new_row) > date_col_index and new_row[date_col_index].strip():
+            try:
+                # Parse the date string to validate it
+                parsed_date = datetime.strptime(new_row[date_col_index], '%Y-%m-%d %H:%M:%S')
+                # Convert back to string for JSON serialization
+                new_row[date_col_index] = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                print(f"Warning: Could not parse date '{new_row[date_col_index]}' in row {row}. Keeping as string.", file=sys.stderr)
         converted_rows.append(new_row)
 
     print(f"Fetching existing data from tab '{worksheet.title}'...", file=sys.stderr)
@@ -206,13 +205,43 @@ def handle_update_sheet(worksheet):
     
     if rows_to_append:
         print(f"Appending {len(rows_to_append)} new rows...", file=sys.stderr)
-        worksheet.append_rows(rows_to_append, value_input_option='RAW')
+        worksheet.append_rows(rows_to_append, value_input_option='USER_ENTERED')
+        
+        # Apply date formatting to the block_date column
+        if date_col_index is not None:
+            spreadsheet = worksheet.spreadsheet
+            sheet_id = worksheet.id
+            requests = [
+                {
+                    'repeatCell': {
+                        'range': {
+                            'sheetId': sheet_id,
+                            'startRowIndex': 1,  # Skip header
+                            'endRowIndex': 1000,  # Arbitrary large number to cover all data rows
+                            'startColumnIndex': date_col_index,
+                            'endColumnIndex': date_col_index + 1
+                        },
+                        'cell': {
+                            'userEnteredFormat': {
+                                'numberFormat': {
+                                    'type': 'DATE',
+                                    'pattern': 'yyyy-mm-dd hh:mm:ss'
+                                }
+                            }
+                        },
+                        'fields': 'userEnteredFormat.numberFormat'
+                    }
+                }
+            ]
+            print(f"Applying date format to column '{DATE_COLUMN_NAME}'...", file=sys.stderr)
+            spreadsheet.batch_update({'requests': requests})
+        
         print("Successfully updated the Google Sheet.", file=sys.stderr)
     else:
         print("No new rows to add. The sheet is already up-to-date.", file=sys.stderr)
         
 def handle_setup_report_tab(spreadsheet, source_tab_name):
-    """Creates/configures the 'Monthly Report' tab with formulas and a slicer."""
+    """Creates/configures the 'Monthly Report' tab with formulas, a slicer, and column formatting."""
     print(f"Attempting to set up the '{REPORT_WORKSHEET_NAME}' tab...", file=sys.stderr)
     
     try:
@@ -239,26 +268,219 @@ def handle_setup_report_tab(spreadsheet, source_tab_name):
     query_formula = f"=QUERY('{source_tab_name}'!A:G, \"SELECT * WHERE A IS NOT NULL\")"       
     reward_formula = (
         f"=ARRAYFORMULA(IF((A2:A <> \"\") * (TEXT(A2:A, \"YYYY-MM\") <> TEXT(A3:A, \"YYYY-MM\")), "
-        f"SUMIF(TEXT(A2:A, \"YYYY-MM\"), TEXT(A2:A, \"YYYY-MM\"), '{source_tab_name}'!H2:H), \"\"))"
+        f"SUMIF(TEXT(A2:A, \"YYYY-MM\"), TEXT(A2:A, \"YYYY-MM\"), '{source_tab_name}'!I2:I), \"\"))"
     )
-    price_formula = f"=ARRAYFORMULA('{source_tab_name}'!I:I)"
-    total_formula = f"=ARRAYFORMULA(IFERROR(ROUND(H2:H*I2:I,2)))"
+        
+    price_formula = f"=ARRAYFORMULA('{source_tab_name}'!H:H)"
+    total_formula = f"=ARRAYFORMULA(IFERROR(ROUND(I2:I*H2:H,2)))"
+    apy = f"=ARRAYFORMULA((1 + I2:I/(D2:D+F2:F))^12 - 1)"
 
     requests.extend([
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': query_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 0}}},
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'stringValue': REPORT_TAB_REWARD_HEADER}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 7}}},
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': reward_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 7}}},        
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': price_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 8}}},
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'formulaValue': total_formula}}]}],'fields': 'userEnteredValue','start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 9}}},
-        {'updateCells': {'rows': [{'values': [{'userEnteredValue': {'stringValue': 'Reward $USD'}}]}], 'fields': 'userEnteredValue', 'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 9}}}
+        # Set the QUERY formula in cell A1
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'formulaValue': query_formula}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 0}
+            }
+        },
+        # Set the price formula in column H
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'formulaValue': price_formula}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 7}
+            }
+        },
+        # Set the header for column I (Monthly Reward)
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'stringValue': REPORT_TAB_REWARD_HEADER}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 8}
+            }
+        },
+        # Set the reward formula in column I
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'formulaValue': reward_formula}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 8}
+            }
+        },
+        # Set the total formula in column J
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'formulaValue': total_formula}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 9}
+            }
+        },
+        # Set the header for column J (Reward $USD)
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'stringValue': 'Monthly Reward'}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 9}
+            }
+        },            
+        # Set the total formula in column K
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'formulaValue': apy}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 10}
+            }
+        },
+        # Set the header for column K (APY)
+        {
+            'updateCells': {
+                'rows': [{'values': [{'userEnteredValue': {'stringValue': 'Est APY'}}]}],
+                'fields': 'userEnteredValue',
+                'start': {'sheetId': report_sheet_id, 'rowIndex': 0, 'columnIndex': 10}
+            }
+        },        
+        # Set Date format
+        {
+            'repeatCell': {
+                'range': {
+                    'sheetId': report_sheet_id,
+                    'startRowIndex': 1,  # Start at row 2 to skip header
+                    'endRowIndex': 1000,  # Covers all potential data rows
+                    'startColumnIndex': 0,  # Column A
+                    'endColumnIndex': 1    # Only column A
+                },
+                'cell': {
+                    'userEnteredFormat': {
+                        'numberFormat': {
+                            'type': 'DATE',
+                            'pattern': 'yyyy mmm'
+                        }
+                    }
+                },
+                'fields': 'userEnteredFormat.numberFormat'
+            }
+        },
+        # Format Column H as $ USD (starting from row 2 to skip header)
+        {
+            'repeatCell': {
+                'range': {
+                    'sheetId': report_sheet_id,
+                    'startRowIndex': 1,  # Start at row 2 (index 1)
+                    'endRowIndex': 1000,  # Arbitrary large number to cover all data rows
+                    'startColumnIndex': 7,  # Column H
+                    'endColumnIndex': 8   # Exclusive, so this affects only column H
+                },
+                'cell': {
+                    'userEnteredFormat': {
+                        'numberFormat': {
+                            'type': 'CURRENCY',
+                            'pattern': '$#,##0.00'
+                        }
+                    }
+                },
+                'fields': 'userEnteredFormat.numberFormat'
+            }
+        },
+        # Format Column I with three decimal places (starting from row 2 to skip header)
+        {
+            'repeatCell': {
+                'range': {
+                    'sheetId': report_sheet_id,
+                    'startRowIndex': 1,  # Start at row 2
+                    'endRowIndex': 1000,
+                    'startColumnIndex': 8,  # Column I
+                    'endColumnIndex': 9
+                },
+                'cell': {
+                    'userEnteredFormat': {
+                        'numberFormat': {
+                            'type': 'NUMBER',
+                            'pattern': '0.000'
+                        }
+                    }
+                },
+                'fields': 'userEnteredFormat.numberFormat'
+            }
+        },
+        # Format Column J as $ USD (starting from row 2 to skip header)
+        {
+            'repeatCell': {
+                'range': {
+                    'sheetId': report_sheet_id,
+                    'startRowIndex': 1,  # Start at row 2
+                    'endRowIndex': 1000,
+                    'startColumnIndex': 9,  # Column J
+                    'endColumnIndex': 10
+                },
+                'cell': {
+                    'userEnteredFormat': {
+                        'numberFormat': {
+                            'type': 'CURRENCY',
+                            'pattern': '$#,##0.00'
+                        }
+                    }
+                },
+                'fields': 'userEnteredFormat.numberFormat'
+            }
+        },                        
+        # Format Column K as APY(starting from row 2 to skip header)
+        {
+            'repeatCell': {
+                'range': {
+                    'sheetId': report_sheet_id,
+                    'startRowIndex': 1,  # Start at row 2
+                    'endRowIndex': 1000,
+                    'startColumnIndex': 10,  # Column K
+                    'endColumnIndex': 11
+                },
+                'cell': {
+                    'userEnteredFormat': {
+                        'numberFormat': {
+                            'type': 'PERCENT',
+                            'pattern': '#0.00%'
+                        }
+                    }
+                },
+                'fields': 'userEnteredFormat.numberFormat'
+            }
+        }            
     ])
     
     print("Adding new slicer for 'Monthly Reward' column...", file=sys.stderr)
     requests.append({
-        'addSlicer': {'slicer': {'spec': {'dataRange': {'sheetId': report_sheet_id, 'startColumnIndex': 0, 'endColumnIndex': 8},'columnIndex': 7,'filterCriteria': {'condition': {'type': 'NUMBER_GREATER', 'values': [{'userEnteredValue': '0'}]}},'title': 'Filter by Reward'},'position': {'overlayPosition': {'anchorCell': {'sheetId': report_sheet_id, 'rowIndex': 1, 'columnIndex': 9}}}}}
+        'addSlicer': {
+            'slicer': {
+                'spec': {
+                    'dataRange': {
+                        'sheetId': report_sheet_id,
+                        'startColumnIndex': 0,
+                        'endColumnIndex': 8
+                    },
+                    'columnIndex': 8,
+                    'filterCriteria': {
+                        'condition': {
+                            'type': 'NUMBER_GREATER',
+                            'values': [{'userEnteredValue': '0'}]
+                        }
+                    },
+                    'title': 'Filter by Reward'
+                },
+                'position': {
+                    'overlayPosition': {
+                        'anchorCell': {
+                            'sheetId': report_sheet_id,
+                            'rowIndex': 1,
+                            'columnIndex': 11
+                        }
+                    }
+                }
+            }
+        }
     })
+                            
 
-    # --- THE FIX: Move the report sheet to the first position ---
+    # Move the report sheet to the first position
     print(f"Moving tab '{REPORT_WORKSHEET_NAME}' to the first position...", file=sys.stderr)
     requests.append({
         'updateSheetProperties': {
@@ -266,14 +488,13 @@ def handle_setup_report_tab(spreadsheet, source_tab_name):
             'fields': 'index'
         }
     })
-    # -----------------------------------------------------------
 
     if requests:
         print("Applying all changes in a single batch update...", file=sys.stderr)
         spreadsheet.batch_update({'requests': requests})
     
-    print(f"Successfully configured tab '{REPORT_WORKSHEET_NAME}'.", file=sys.stderr)
-
+    print(f"Successfully configured tab '{REPORT_WORKSHEET_NAME}' with formatted columns.", file=sys.stderr)
+    
 def main():
     """Main function to parse arguments and delegate action."""
     parser = argparse.ArgumentParser(description="Update a Google Sheet from CSV data, get the last entry date, or set up a report tab.")
