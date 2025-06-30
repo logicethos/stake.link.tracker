@@ -412,10 +412,13 @@ def main():
 
     try:
         utc = pytz.UTC
-        default_start_date = datetime.strptime(DEFAULT_START_DATE, "%Y-%m-%d").replace(tzinfo=utc)
-        monday_end_date = datetime(2025, 2, 24, 0, 0, 0, tzinfo=utc)
+        
+        # --- Use a dynamic end date for queries ---
+        end_date = datetime.now(utc)
 
         if args.datefrom == DEFAULT_START_DATE:
+            # Default behavior: find the first transaction and start from there
+            default_start_date = datetime.strptime(DEFAULT_START_DATE, "%Y-%m-%d").replace(tzinfo=utc)
             start_timestamp = int(default_start_date.timestamp())
             start_block = get_block_number_for_timestamp(w3, start_timestamp)
             
@@ -428,14 +431,17 @@ def main():
             
             if not transaction_blocks:
                 if not args.csv:
-                    raise ValueError("No transactions found for the given wallet and data provider since default_start_date")
+                    raise ValueError("No stake/withdraw transactions found for the given wallet since the default start date.")
                 else:
+                    writer = csv.writer(sys.stdout, lineterminator='\n')
+                    writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'link_price_usd' , 'reward_share'])
                     return
             
             earliest_block = min(block_num for block_num, _ in transaction_blocks)
-            earliest_timestamp = w3.eth.get_block(earliest_block).timestamp
+            earliest_timestamp = get_block_timestamp(earliest_block)
             start_date = datetime.fromtimestamp(earliest_timestamp, tz=utc)
         else:
+            # User specified a start date
             start_date = datetime.strptime(args.datefrom, "%Y-%m-%d").replace(tzinfo=utc)
             start_timestamp = int(start_date.timestamp())
             start_block = get_block_number_for_timestamp(w3, start_timestamp)
@@ -447,29 +453,54 @@ def main():
                 args.csv
             )
         
-        monday_blocks = get_monday_block_numbers(start_date, monday_end_date, TIME_OF_DAY)
+        # --- FIX 1: REMOVE the predictive Monday checker. It causes phantom and duplicate entries. ---
+        # We now ONLY rely on the actual on-chain reward transactions found below.
+        # monday_blocks = get_monday_block_numbers(start_date, end_date, TIME_OF_DAY)
         
+        # This function is the single source of truth for reward events.
         method_id = "0x128606a6"
         update_rewards_blocks = fetch_update_rewards_blocks(REBASE_CONTROLLER_ADDRESS, start_block, method_id, args.csv)
         
-        all_blocks = sorted(
-            monday_blocks +
-            transaction_blocks +
-            update_rewards_blocks,
+        # --- FIX 2: De-duplicate the combined list to ensure each block is processed only once. ---
+        # This prevents issues if multiple functions ever find the same event block.
+        combined_blocks = transaction_blocks + update_rewards_blocks
+        unique_blocks = sorted(
+            list(set(combined_blocks)),
             key=lambda x: x[0]
         )
+        
+        all_blocks = unique_blocks
+        
+        # Create a 'Baseline' event to ensure reward calculation always works
+        if all_blocks:
+            first_block_num = all_blocks[0][0]
+            baseline_block = (first_block_num - 1, "Baseline")
+            all_blocks.insert(0, baseline_block)
         
         if args.csv:
             writer = csv.writer(sys.stdout, lineterminator='\n')
             writer.writerow(['block_date', 'block', 'type', 'stlink_balance', 'link_balance', 'lsd_tokens', 'queued_tokens', 'link_price_usd' , 'reward_share'])
         else:
-            print(f"\n=== Balances for {USER_WALLET_ADDRESS} at {len(all_blocks)} blocks ===")
+            if not all_blocks:
+                 print("No relevant events found after the specified start date.")
+                 return
+            # -1 to not count the baseline event in the user-facing summary
+            print(f"\n=== Balances for {USER_WALLET_ADDRESS} at {len(all_blocks)-1} relevant blocks ===") 
         
         previous_stlink_balance_uint = None
         previous_lsd_tokens_uint = None
         previous_queued_tokens_uint = None
+        
         for block_num, block_type in all_blocks:
             try:
+                # Skip printing the baseline row itself, it's only for calculation
+                if block_type == "Baseline":
+                    balances = get_wallet_balances(USER_WALLET_ADDRESS, block_num, args.csv)
+                    previous_stlink_balance_uint = uint256_to_decimal(balances['stlink_balance'])
+                    previous_lsd_tokens_uint = uint256_to_decimal(balances['lsd_tokens'])
+                    previous_queued_tokens_uint = uint256_to_decimal(balances['queued_tokens'])
+                    continue
+
                 block_timestamp = get_block_timestamp(block_num)
                 block_date = datetime.fromtimestamp(block_timestamp, tz=utc)
                 block_date_str = block_date.strftime("%Y-%m-%d %H:%M:%S")
@@ -485,15 +516,14 @@ def main():
                 if block_type == "Rewards":
                     if previous_lsd_tokens_uint is not None:
                        reward = (stlink_balance_uint - previous_stlink_balance_uint) + (lsd_tokens_uint - previous_lsd_tokens_uint) - (previous_queued_tokens_uint - queued_tokens_uint)
-                    else:
-                       continue
                 
-                link_price = get_link_price(price_date, args.csv) if block_type == "Rewards" else 0.0
+                link_price = get_link_price(price_date, args.csv) if block_type == "Rewards" and reward > 0 else 0.0
                 
+                # Update previous state for the next iteration
                 previous_stlink_balance_uint = stlink_balance_uint
                 previous_lsd_tokens_uint = lsd_tokens_uint
                 previous_queued_tokens_uint = queued_tokens_uint
-                
+
                 if args.csv:
                     writer.writerow([
                         block_date_str,
@@ -520,16 +550,18 @@ def main():
                         
             except Exception as e:
                 if not args.csv:
-                    print(f"Error processing block {block_num}: {e}")
+                    print(f"Error processing block {block_num} ({block_type}): {e}")
                 continue
     except ValueError as e:
         if not args.csv:
             print(f"Error: {e}")
-        exit(1)
+        sys.exit(1)
     except Exception as e:
         if not args.csv:
-            print(f"Unexpected error: {e}")
-        exit(1)
+            import traceback
+            print(f"An unexpected error occurred: {e}")
+            traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
