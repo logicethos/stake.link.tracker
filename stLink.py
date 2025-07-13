@@ -461,8 +461,11 @@ def main():
                 args.csv
             )
         
-        monday_blocks = get_monday_block_numbers(start_date, monday_end_date, TIME_OF_DAY)
+        # --- FIX 1: REMOVE the predictive Monday checker. It causes phantom and duplicate entries. ---
+        # We now ONLY rely on the actual on-chain reward transactions found below.
+        # monday_blocks = get_monday_block_numbers(start_date, end_date, TIME_OF_DAY)
         
+        # This function is the single source of truth for reward events.
         method_id = "0x128606a6"
         update_rewards_blocks = fetch_update_rewards_blocks(REBASE_CONTROLLER_ADDRESS, start_block, method_id, args.csv)
         
@@ -521,15 +524,14 @@ def main():
                 if block_type == "Rewards":
                     if previous_lsd_tokens_uint is not None:
                        reward = (stlink_balance_uint - previous_stlink_balance_uint) + (lsd_tokens_uint - previous_lsd_tokens_uint) - (previous_queued_tokens_uint - queued_tokens_uint)
-                    else:
-                       continue
                 
                 link_price = get_link_price(price_date, args.currency, args.csv) if block_type == "Rewards" and reward > 0 else 0.0
                 
+                # Update previous state for the next iteration
                 previous_stlink_balance_uint = stlink_balance_uint
                 previous_lsd_tokens_uint = lsd_tokens_uint
                 previous_queued_tokens_uint = queued_tokens_uint
-                
+
                 if args.csv:
                     writer.writerow([
                         block_date_str,
