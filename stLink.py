@@ -379,6 +379,12 @@ def fetch_update_rewards_blocks(rebase_controller_address: str, start_block: int
         return []
 
 def get_monday_block_numbers(start_date: datetime, end_date: datetime, TIME_OF_DAY: str) -> list[tuple[int, str]]:
+    monday_end_date = datetime(2025, 2, 24, 0, 0, 0, tzinfo=pytz.UTC)
+    
+    # Return empty array if start_date is after monday_end_date
+    if start_date > monday_end_date:
+        return []
+        
     blocks = []
     utc = pytz.UTC
     time_parts = list(map(int, TIME_OF_DAY.split(":")))
@@ -386,7 +392,7 @@ def get_monday_block_numbers(start_date: datetime, end_date: datetime, TIME_OF_D
     
     current_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
     while current_date <= end_date:
-        if current_date.weekday() == 0:
+        if current_date.weekday() == 0:  # Monday
             target_datetime = current_date + target_time
             if start_date <= target_datetime < end_date:
                 timestamp = int(target_datetime.timestamp())
@@ -421,8 +427,7 @@ def main():
         utc = pytz.UTC
         
         # --- Use a dynamic end date for queries ---
-        end_date = datetime.now(utc)
-        monday_end_date = datetime(2025, 2, 24, 0, 0, 0, tzinfo=utc)
+        end_date = datetime.now(utc)       
 
         if args.datefrom == DEFAULT_START_DATE:
             # Default behavior: find the first transaction and start from there
@@ -461,9 +466,8 @@ def main():
                 args.csv
             )
         
-        # --- FIX 1: REMOVE the predictive Monday checker. It causes phantom and duplicate entries. ---
-        # We now ONLY rely on the actual on-chain reward transactions found below.
-        # monday_blocks = get_monday_block_numbers(start_date, end_date, TIME_OF_DAY)
+        
+        monday_blocks = get_monday_block_numbers(start_date, end_date, TIME_OF_DAY)
         
         # This function is the single source of truth for reward events.
         method_id = "0x128606a6"
